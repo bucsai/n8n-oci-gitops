@@ -72,6 +72,7 @@ GitHub Actions (on push/PR)
 - [x] Provision the ARM compute instance
 - [x] Automate Docker + n8n installation on the instance via cloud-init
 - [x] Set up Cloudflare Tunnel and DNS routing to `n8n.bucsai.dev`
+- [x] Provision the n8n owner account and license activation via Pulumi config
 - [ ] Configure Pulumi remote state backend
 - [ ] Build GitHub Actions workflow for `pulumi preview`/`pulumi up` on push/PR
 - [ ] Document secrets/config management (OCI API keys, Cloudflare API token)
@@ -96,18 +97,30 @@ Before running anything in this repo, the following need to be in place:
 - **Pulumi CLI** installed, and a [Pulumi Cloud](https://app.pulumi.com/) account for the state backend (free for individual use). Run `pulumi login` once locally.
 - **Two application secrets** set via Pulumi config before applying the stack:
   ```bash
-  pulumi config set --secret postgresPassword "$(openssl rand -hex 24)"
-  pulumi config set --secret n8nEncryptionKey "$(openssl rand -hex 32)"
+  pulumi config set --secret postgres:password "$(openssl rand -hex 24)"
+  pulumi config set --secret n8n:encryptionKey "$(openssl rand -hex 32)"
   ```
-  `n8nEncryptionKey` in particular must stay fixed across instance replacements — n8n uses it to encrypt stored credentials, so changing it makes existing credentials unreadable.
+  `n8n:encryptionKey` in particular must stay fixed across instance replacements — n8n uses it to encrypt stored credentials, so changing it makes existing credentials unreadable.
 - **uv** installed for Python dependency/toolchain management (`uv sync` sets up the venv used by Pulumi).
 - **Cloudflare account** with `bucsai.dev` added as a zone, plus a Cloudflare API token scoped for `Account.Cloudflare Tunnel:Edit` and `Zone.DNS:Edit` on that zone. Set the following Pulumi config before applying the stack:
   ```bash
-  pulumi config set --secret cloudflareApiToken "<token>"
-  pulumi config set --secret cloudflareAccountId "<account id, from the Cloudflare dashboard URL or API>"
-  pulumi config set --secret cloudflareZoneId "<zone id for bucsai.dev, from the domain overview page>"
+  pulumi config set --secret cloudflare:apiToken "<token>"
+  pulumi config set --secret cloudflare:accountId "<account id, from the Cloudflare dashboard URL or API>"
+  pulumi config set --secret cloudflare:zoneId "<zone id for bucsai.dev, from the domain overview page>"
   ```
-  `n8nHostname` defaults to `n8n.bucsai.dev`; override with `pulumi config set n8nHostname <hostname>` if needed.
+  `n8n:hostname` defaults to `n8n.bucsai.dev`; override with `pulumi config set n8n:hostname <hostname>` if needed.
+- **n8n owner account details** — provisioned via n8n's native `N8N_INSTANCE_OWNER_MANAGED_BY_ENV` mechanism (n8n >= 2.17.0), which creates the account at n8n's own startup, before it ever serves a request — so the public "Set up owner account" screen never appears on the live domain:
+  ```bash
+  pulumi config set --secret n8n:ownerEmail "you@example.com"
+  pulumi config set n8n:ownerFirstName "Your First Name"
+  pulumi config set n8n:ownerLastName "Your Last Name"
+  pulumi config set --secret n8n:ownerPassword "$(openssl rand -base64 24)"
+  ```
+  `__main__.py` bcrypt-hashes the password at synth time (n8n needs a hash, not plaintext) and passes it via a dedicated `env_file`. The hash's literal `$` characters are doubled to `$$` before writing, since compose interpolates `${VAR}`-style references in `env_file` values too (not just in the compose YAML itself) — without escaping, compose would parse fragments of the hash as unset variable references and blank them out. `N8N_INSTANCE_OWNER_MANAGED_BY_ENV=true` also locks owner profile edits in the n8n UI — change these values via Pulumi config and redeploy instead of editing them in-app.
+- **n8n license key** (optional) — activates a registered n8n license at startup:
+  ```bash
+  pulumi config set --secret n8n:licenseKey "<license key>"
+  ```
 - **GitHub repository secrets**, once the Actions pipeline is added:
   - `PULUMI_ACCESS_TOKEN` — lets CI authenticate to the Pulumi Cloud backend
   - OCI credentials (API key contents, tenancy/user OCIDs, fingerprint, region) — passed as Pulumi config or provider env vars

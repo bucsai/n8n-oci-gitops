@@ -2,17 +2,26 @@
 
 import base64
 
+import bcrypt
 import pulumi
 import pulumi_cloudflare as cloudflare
 import pulumi_oci as oci
 
-config = pulumi.Config()
-postgres_password = config.require_secret("postgresPassword")
-n8n_encryption_key = config.require_secret("n8nEncryptionKey")
-cloudflare_api_token = config.require_secret("cloudflareApiToken")
-cloudflare_account_id = config.require_secret("cloudflareAccountId")
-cloudflare_zone_id = config.require_secret("cloudflareZoneId")
-n8n_hostname = config.get("n8nHostname") or "n8n.bucsai.dev"
+postgres_config = pulumi.Config("postgres")
+n8n_config = pulumi.Config("n8n")
+cloudflare_config = pulumi.Config("cloudflare")
+
+postgres_password = postgres_config.require_secret("password")
+n8n_encryption_key = n8n_config.require_secret("encryptionKey")
+cloudflare_api_token = cloudflare_config.require_secret("apiToken")
+cloudflare_account_id = cloudflare_config.require_secret("accountId")
+cloudflare_zone_id = cloudflare_config.require_secret("zoneId")
+n8n_hostname = n8n_config.get("hostname") or "n8n.bucsai.dev"
+n8n_owner_email = n8n_config.require_secret("ownerEmail")
+n8n_owner_first_name = n8n_config.require("ownerFirstName")
+n8n_owner_last_name = n8n_config.require("ownerLastName")
+n8n_owner_password = n8n_config.require_secret("ownerPassword")
+n8n_license_key = n8n_config.get_secret("licenseKey") or pulumi.Output.from_input("")
 
 DATA_DEVICE = "/dev/oracleoci/oraclevdb"
 DATA_MOUNT_POINT = "/mnt/n8n-data"
@@ -30,6 +39,21 @@ write_files:
       POSTGRES_PASSWORD={postgres_password}
       N8N_ENCRYPTION_KEY={n8n_encryption_key}
       TUNNEL_TOKEN={tunnel_token}
+      N8N_LICENSE_ACTIVATION_KEY={n8n_license_key}
+
+  - path: /opt/n8n/owner.env
+    permissions: "0600"
+    content: |
+      N8N_INSTANCE_OWNER_EMAIL={n8n_owner_email}
+      N8N_INSTANCE_OWNER_FIRST_NAME={n8n_owner_first_name}
+      N8N_INSTANCE_OWNER_LAST_NAME={n8n_owner_last_name}
+      N8N_INSTANCE_OWNER_PASSWORD_HASH={n8n_owner_password_hash}
+      # Kept in its own env_file rather than the shared .env because the
+      # bcrypt hash contains literal $ characters. Compose interpolates
+      # ${{VAR}}-style references in env_file values too (not just in the
+      # compose YAML), so those characters must be doubled to $$ below —
+      # otherwise compose parses e.g. "$rOHK" as an unset variable and
+      # silently blanks it, corrupting the hash.
 
   - path: /opt/n8n/docker-compose.yml
     permissions: "0644"
@@ -68,6 +92,15 @@ write_files:
             N8N_PROTOCOL: https
             N8N_PORT: "5678"
             WEBHOOK_URL: https://{hostname}/
+            # Provisions the owner account from these values at startup,
+            # before n8n ever serves a request — the public "Set up owner
+            # account" screen never appears on the live domain. Also locks
+            # owner profile edits in the UI; change email/name/password by
+            # updating Pulumi config and redeploying instead.
+            N8N_INSTANCE_OWNER_MANAGED_BY_ENV: "true"
+            N8N_LICENSE_ACTIVATION_KEY: ${{N8N_LICENSE_ACTIVATION_KEY}}
+          env_file:
+            - owner.env
           volumes:
             - {data_mount}/n8n:/home/node/.n8n
 
@@ -105,13 +138,31 @@ runcmd:
 
 
 def _render_cloud_init(
-    pg_password: str, encryption_key: str, tunnel_token: str, hostname: str
+    pg_password: str,
+    encryption_key: str,
+    tunnel_token: str,
+    hostname: str,
+    owner_email: str,
+    owner_first_name: str,
+    owner_last_name: str,
+    owner_password: str,
+    license_key: str,
 ) -> str:
+    # Doubled to $$ so compose's env_file interpolation reproduces a literal
+    # $ instead of treating each $-prefixed segment as a variable reference.
+    owner_password_hash = bcrypt.hashpw(
+        owner_password.encode(), bcrypt.gensalt()
+    ).decode().replace("$", "$$")
     rendered = CLOUD_INIT_TEMPLATE.format(
         postgres_password=pg_password,
         n8n_encryption_key=encryption_key,
         tunnel_token=tunnel_token,
         hostname=hostname,
+        n8n_owner_email=owner_email,
+        n8n_owner_first_name=owner_first_name,
+        n8n_owner_last_name=owner_last_name,
+        n8n_owner_password_hash=owner_password_hash,
+        n8n_license_key=license_key,
         data_mount=DATA_MOUNT_POINT,
         device=DATA_DEVICE,
     )
@@ -268,7 +319,15 @@ data_volume = oci.core.Volume(
 )
 
 cloud_init_b64 = pulumi.Output.all(
-    postgres_password, n8n_encryption_key, tunnel_token, n8n_hostname
+    postgres_password,
+    n8n_encryption_key,
+    tunnel_token,
+    n8n_hostname,
+    n8n_owner_email,
+    n8n_owner_first_name,
+    n8n_owner_last_name,
+    n8n_owner_password,
+    n8n_license_key,
 ).apply(lambda args: _render_cloud_init(*args))
 
 instance = oci.core.Instance(
