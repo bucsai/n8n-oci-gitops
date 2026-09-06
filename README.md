@@ -76,6 +76,11 @@ GitHub Actions (on push/PR)
 - [ ] Build GitHub Actions workflow for `pulumi preview`/`pulumi up` on push/PR
 - [ ] Document secrets/config management (OCI API keys, Cloudflare API token)
 
+## Known Limitations / Follow-ups
+
+- **`n8nio/n8n:latest` is unpinned.** Every instance replacement pulls whatever is current at that moment, which is non-reproducible and can introduce breaking changes silently. Should be pinned to a specific version tag once the stack is stable enough that upgrades can be deliberate, versioned changes in `__main__.py` instead.
+- **Instance sized at 2 OCPU / 12GB**, half of the Always Free ARM allowance (4 OCPU / 24GB total) — deliberate headroom, not a constraint. Adjustable via `shape_config` in `__main__.py` if n8n needs more.
+
 ## Prerequisites
 
 Before running anything in this repo, the following need to be in place:
