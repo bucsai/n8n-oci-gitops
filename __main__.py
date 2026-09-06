@@ -18,12 +18,15 @@ vcn = oci.core.Vcn(
     dns_label="n8nvcn",
 )
 
-internet_gateway = oci.core.InternetGateway(
-    "n8n-igw",
+# No Internet Gateway: nothing in this VCN ever gets a public IP, so there's
+# no public-facing entity that would need one. Outbound-only internet access
+# (for Docker image pulls, apt/dnf, and the Cloudflare Tunnel connection) goes
+# through a NAT Gateway instead.
+nat_gateway = oci.core.NatGateway(
+    "n8n-nat-gateway",
     compartment_id=compartment.id,
     vcn_id=vcn.id,
-    enabled=True,
-    display_name="n8n-igw",
+    display_name="n8n-nat-gateway",
 )
 
 route_table = oci.core.RouteTable(
@@ -34,7 +37,7 @@ route_table = oci.core.RouteTable(
         oci.core.RouteTableRouteRuleArgs(
             destination="0.0.0.0/0",
             destination_type="CIDR_BLOCK",
-            network_entity_id=internet_gateway.id,
+            network_entity_id=nat_gateway.id,
         )
     ],
 )
@@ -66,8 +69,46 @@ subnet = oci.core.Subnet(
     dns_label="n8nsubnet",
     route_table_id=route_table.id,
     security_list_ids=[security_list.id],
+    # Private subnet: no VNIC created here can ever be assigned a public IP,
+    # regardless of what's requested at instance launch time.
+    prohibit_public_ip_on_vnic=True,
+    opts=pulumi.ResourceOptions(delete_before_replace=True),
+)
+
+availability_domain = oci.identity.get_availability_domains_output(
+    compartment_id=compartment.id
+).availability_domains[0].name
+
+ubuntu_arm_image_id = oci.core.get_images_output(
+    compartment_id=compartment.id,
+    operating_system="Canonical Ubuntu",
+    operating_system_version="24.04",
+    shape="VM.Standard.A1.Flex",
+    sort_by="TIMECREATED",
+    sort_order="DESC",
+).images[0].id
+
+instance = oci.core.Instance(
+    "n8n-instance",
+    compartment_id=compartment.id,
+    availability_domain=availability_domain,
+    shape="VM.Standard.A1.Flex",
+    shape_config=oci.core.InstanceShapeConfigArgs(
+        ocpus=2,
+        memory_in_gbs=12,
+    ),
+    source_details=oci.core.InstanceSourceDetailsArgs(
+        source_type="image",
+        source_id=ubuntu_arm_image_id,
+    ),
+    create_vnic_details=oci.core.InstanceCreateVnicDetailsArgs(
+        subnet_id=subnet.id,
+        assign_public_ip="false",
+    ),
+    display_name="n8n-instance",
 )
 
 pulumi.export("compartment_id", compartment.id)
 pulumi.export("vcn_id", vcn.id)
 pulumi.export("subnet_id", subnet.id)
+pulumi.export("instance_id", instance.id)

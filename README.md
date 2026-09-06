@@ -62,7 +62,7 @@ GitHub Actions (on push/PR)
 ## Roadmap
 
 - [x] Define OCI networking (VCN, subnet, security list) via Pulumi
-- [ ] Provision the ARM compute instance
+- [x] Provision the ARM compute instance
 - [ ] Automate Docker + n8n installation on the instance via cloud-init
 - [ ] Set up Cloudflare Tunnel and DNS routing to the `.dev` domain
 - [ ] Configure Pulumi remote state backend
