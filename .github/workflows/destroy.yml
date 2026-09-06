@@ -1,0 +1,31 @@
+name: Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy" to confirm tearing down the stack'
+        required: true
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check confirmation
+        if: ${{ github.event.inputs.confirm != 'destroy' }}
+        run: |
+          echo "Confirmation input must be exactly 'destroy'. Aborting."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - uses: pulumi/actions@v6
+        with:
+          command: destroy
+          stack-name: bucsai/n8n-oci-gitops/dev
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
