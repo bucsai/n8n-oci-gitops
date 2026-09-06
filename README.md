@@ -67,7 +67,7 @@ flowchart TD
 - [x] Automate Docker + n8n installation on the instance via cloud-init
 - [x] Set up Cloudflare Tunnel and DNS routing to `n8n.bucsai.dev`
 - [x] Provision the n8n owner account and license activation via Pulumi config
-- [ ] Configure Pulumi remote state backend
+- [x] Configure Pulumi remote state backend (Pulumi Cloud, via `pulumi login`)
 - [ ] Build GitHub Actions workflow for `pulumi preview`/`pulumi up` on push/PR
 - [ ] Document secrets/config management (OCI API keys, Cloudflare API token)
 
