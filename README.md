@@ -5,8 +5,8 @@ A GitOps-managed deployment of [n8n](https://n8n.io/) (workflow automation tool)
 ## Project Goals
 
 - Provision a free-tier OCI Ampere (ARM) compute instance using Pulumi
-- Deploy and run n8n on that instance via automated configuration management
-- Expose n8n securely to the public internet through a Cloudflare Tunnel, mapped to a custom `.dev` domain — no open inbound ports on the VM
+- Deploy and run n8n on that instance via cloud-init, treating the instance as immutable — no inbound access, no ad hoc changes; config updates mean replacing the instance, not logging into it
+- Expose n8n securely to the public internet through a Cloudflare Tunnel, mapped to a custom `.dev` domain — no open inbound ports on the VM at all, including SSH
 - Drive all provisioning and configuration changes through a GitHub Actions pipeline, so infrastructure changes are triggered by commits/PRs rather than manual `pulumi up` runs
 - Keep all infrastructure state, configuration, and history versioned in this repository (GitOps model)
 
@@ -27,7 +27,7 @@ GitHub Actions (on push/PR)
         ▼
   Compute Instance (VM.Standard.A1.Flex, Always Free ARM shape)
         │
-        ├── Docker + n8n (via cloud-init / config management)
+        ├── Docker + n8n (via cloud-init, one-shot at boot)
         └── cloudflared (Cloudflare Tunnel client)
                 │
                 ▼
@@ -52,6 +52,7 @@ GitHub Actions (on push/PR)
 - **OCI Always Free ARM tier**: provides a genuinely free, always-on VM (up to 4 OCPUs / 24GB RAM across Ampere A1 instances), which is more generous than most free tiers and well suited to running a lightweight workflow engine like n8n.
 - **Cloudflare Tunnel**: avoids exposing the VM's public IP or opening inbound firewall ports — the tunnel makes an outbound-only connection from the VM to Cloudflare's edge, which terminates TLS and routes traffic to the custom domain.
 - **Pulumi over Terraform + Ansible**: the original plan was Terraform for provisioning paired with Ansible for configuration management. Given the scope of this project (a single VM running one application), that split added more moving parts than it was worth. Pulumi covers both provisioning and, via its Python program, enough configuration logic (e.g. cloud-init) to avoid needing a separate config management tool — one language, one tool, one state model.
+- **Immutable instance, no SSH**: the instance has no inbound security list rules at all — not even SSH. All setup happens once via cloud-init at boot; a config change means replacing the instance through Pulumi, not connecting to fix it in place. This follows the "cattle, not pets" principle and keeps the actual running state from drifting away from what's declared in Git, which matters more once this is public-facing and accepting logins. Emergency debugging (if ever needed) goes through OCI's Instance Console Connection, which doesn't touch the VCN or require any open port.
 - **GitHub Actions as the deployment trigger**: every infrastructure or configuration change goes through version control and a pipeline run, rather than being applied ad hoc from a local machine — the core GitOps principle this project demonstrates.
 
 ## Status
@@ -60,13 +61,33 @@ GitHub Actions (on push/PR)
 
 ## Roadmap
 
-- [ ] Define OCI networking (VCN, subnet, security list) via Pulumi
+- [x] Define OCI networking (VCN, subnet, security list) via Pulumi
 - [ ] Provision the ARM compute instance
-- [ ] Automate Docker + n8n installation on the instance (cloud-init or dedicated config management)
+- [ ] Automate Docker + n8n installation on the instance via cloud-init
 - [ ] Set up Cloudflare Tunnel and DNS routing to the `.dev` domain
 - [ ] Configure Pulumi remote state backend
 - [ ] Build GitHub Actions workflow for `pulumi preview`/`pulumi up` on push/PR
 - [ ] Document secrets/config management (OCI API keys, Cloudflare API token)
+
+## Prerequisites
+
+Before running anything in this repo, the following need to be in place:
+
+- **OCI account** with the Always Free tier available in your home region (Ampere A1 capacity isn't guaranteed in every region — worth checking availability first).
+- **OCI API key configured for Pulumi**, either as a local `~/.oci/config` file or as equivalent Pulumi OCI provider config values. You'll need, from the OCI Console (Identity → Users → your user → API Keys):
+  - Tenancy OCID
+  - User OCID
+  - Region
+  - An API signing key pair, with the public key uploaded to your OCI user and the fingerprint noted
+- **Pulumi CLI** installed, and a [Pulumi Cloud](https://app.pulumi.com/) account for the state backend (free for individual use). Run `pulumi login` once locally.
+- **uv** installed for Python dependency/toolchain management (`uv sync` sets up the venv used by Pulumi).
+- **Cloudflare account** with the target `.dev` domain added, plus a Cloudflare API token scoped for managing Tunnels and DNS records (needed once we get to the Cloudflare Tunnel step).
+- **GitHub repository secrets**, once the Actions pipeline is added:
+  - `PULUMI_ACCESS_TOKEN` — lets CI authenticate to the Pulumi Cloud backend
+  - OCI credentials (API key contents, tenancy/user OCIDs, fingerprint, region) — passed as Pulumi config or provider env vars
+  - Cloudflare API token — for Tunnel/DNS provisioning
+
+Nothing above should ever be committed in plaintext; anything stack-specific (like the OCI credentials above) goes in Pulumi config via `pulumi config set --secret <key> <value>`, which encrypts the value before it's written to `Pulumi.<stack>.yaml`.
 
 ## Local Development
 
