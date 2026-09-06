@@ -12,31 +12,25 @@ A GitOps-managed deployment of [n8n](https://n8n.io/) (workflow automation tool)
 
 ## Architecture (planned)
 
-```
-GitHub Actions (on push/PR)
-        │
-        ▼
-   Pulumi (Python, uv toolchain)
-        │
-        ▼
-  OCI Compartment
-        │
-        ▼
-  VCN + Subnet + Security List
-        │
-        ▼
-  Compute Instance (VM.Standard.A1.Flex, Always Free ARM shape)
-        │
-        ├── Docker (installed via cloud-init, one-shot at boot)
-        │     ├── postgres  ─── data dir on attached Block Volume
-        │     ├── n8n       ─── talks to postgres, ~/.n8n dir on Block Volume
-        │     └── cloudflared (Cloudflare Tunnel client)
-        │                         │
-        │                         ▼
-        │                Cloudflare Tunnel → n8n.bucsai.dev → public internet
-        │
-        └── Block Volume (separate lifecycle from the instance — survives
-              instance replacement, so n8n's data outlives config changes)
+```mermaid
+flowchart TD
+    GHA["GitHub Actions<br/>(on push/PR)"] --> Pulumi["Pulumi<br/>(Python, uv toolchain)"]
+    Pulumi --> Compartment["OCI Compartment"]
+    Compartment --> Net["VCN + Subnet + Security List"]
+    Net --> Instance["Compute Instance<br/>VM.Standard.A1.Flex, Always Free ARM shape"]
+
+    Instance --> Docker["Docker<br/>(installed via cloud-init, one-shot at boot)"]
+    Docker --> Postgres["postgres<br/>data dir on attached Block Volume"]
+    Docker --> N8N["n8n<br/>talks to postgres, ~/.n8n dir on Block Volume"]
+    Docker --> Cloudflared["cloudflared<br/>(Cloudflare Tunnel client)"]
+
+    N8N -.-> Postgres
+    Cloudflared -.-> N8N
+    Cloudflared --> Tunnel["Cloudflare Tunnel"] --> DNS["n8n.bucsai.dev"] --> Internet["public internet"]
+
+    Instance --> Volume["Block Volume<br/>separate lifecycle from the instance —<br/>survives instance replacement, so n8n's<br/>data outlives config changes"]
+    Volume -.-> Postgres
+    Volume -.-> N8N
 ```
 
 ## Tech Stack
