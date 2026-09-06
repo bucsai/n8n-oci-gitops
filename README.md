@@ -27,11 +27,16 @@ GitHub Actions (on push/PR)
         ▼
   Compute Instance (VM.Standard.A1.Flex, Always Free ARM shape)
         │
-        ├── Docker + n8n (via cloud-init, one-shot at boot)
-        └── cloudflared (Cloudflare Tunnel client)
-                │
-                ▼
-       Cloudflare Tunnel → custom .dev domain → public internet
+        ├── Docker (installed via cloud-init, one-shot at boot)
+        │     ├── postgres  ─── data dir on attached Block Volume
+        │     ├── n8n       ─── talks to postgres, ~/.n8n dir on Block Volume
+        │     └── cloudflared (Cloudflare Tunnel client, added in a later step)
+        │                         │
+        │                         ▼
+        │                Cloudflare Tunnel → custom .dev domain → public internet
+        │
+        └── Block Volume (separate lifecycle from the instance — survives
+              instance replacement, so n8n's data outlives config changes)
 ```
 
 ## Tech Stack
@@ -43,6 +48,7 @@ GitHub Actions (on push/PR)
 | Cloud provider | Oracle Cloud Infrastructure (OCI), Always Free tier |
 | Compute | ARM Ampere `VM.Standard.A1.Flex` instance |
 | Application | [n8n](https://n8n.io/) (self-hosted, Dockerized) |
+| Database | PostgreSQL (Dockerized, data on a dedicated OCI Block Volume) |
 | Ingress / exposure | Cloudflare Tunnel (`cloudflared`) |
 | DNS | Custom `.dev` domain via Cloudflare |
 | CI/CD | GitHub Actions |
@@ -54,16 +60,17 @@ GitHub Actions (on push/PR)
 - **Pulumi over Terraform + Ansible**: the original plan was Terraform for provisioning paired with Ansible for configuration management. Given the scope of this project (a single VM running one application), that split added more moving parts than it was worth. Pulumi covers both provisioning and, via its Python program, enough configuration logic (e.g. cloud-init) to avoid needing a separate config management tool — one language, one tool, one state model.
 - **Immutable instance, no SSH**: the instance has no inbound security list rules at all — not even SSH. All setup happens once via cloud-init at boot; a config change means replacing the instance through Pulumi, not connecting to fix it in place. This follows the "cattle, not pets" principle and keeps the actual running state from drifting away from what's declared in Git, which matters more once this is public-facing and accepting logins. Emergency debugging (if ever needed) goes through OCI's Instance Console Connection, which doesn't touch the VCN or require any open port.
 - **GitHub Actions as the deployment trigger**: every infrastructure or configuration change goes through version control and a pipeline run, rather than being applied ad hoc from a local machine — the core GitOps principle this project demonstrates.
+- **PostgreSQL on a dedicated Block Volume, not local SQLite**: n8n defaults to a local SQLite file for its workflows/credentials, which would be lost every time the instance is replaced. Postgres runs as its own container with its data directory on a separate OCI Block Volume — a resource with its own lifecycle, independent of the compute instance. Replacing the instance (a config change) never touches this volume, so the data survives. (OCI's free-tier "Autonomous Database" was considered first, but it's Oracle's own database engine, not Postgres-compatible, and isn't usable with n8n.) The volume is attached at instance *launch time* rather than as a separate post-launch step, so it's already present when cloud-init runs on first boot — avoiding a race between cloud-init and a later attachment call.
 
 ## Status
 
-🚧 Early stage — repository currently contains Pulumi project scaffolding only. Compute, networking, n8n deployment, Cloudflare Tunnel integration, and the GitHub Actions pipeline are not yet implemented.
+🚧 In progress — networking, compute, and the Docker/Postgres/n8n stack are provisioned via Pulumi. Cloudflare Tunnel integration and the GitHub Actions pipeline are not yet implemented.
 
 ## Roadmap
 
 - [x] Define OCI networking (VCN, subnet, security list) via Pulumi
 - [x] Provision the ARM compute instance
-- [ ] Automate Docker + n8n installation on the instance via cloud-init
+- [x] Automate Docker + n8n installation on the instance via cloud-init
 - [ ] Set up Cloudflare Tunnel and DNS routing to the `.dev` domain
 - [ ] Configure Pulumi remote state backend
 - [ ] Build GitHub Actions workflow for `pulumi preview`/`pulumi up` on push/PR
@@ -80,6 +87,12 @@ Before running anything in this repo, the following need to be in place:
   - Region
   - An API signing key pair, with the public key uploaded to your OCI user and the fingerprint noted
 - **Pulumi CLI** installed, and a [Pulumi Cloud](https://app.pulumi.com/) account for the state backend (free for individual use). Run `pulumi login` once locally.
+- **Two application secrets** set via Pulumi config before applying the stack:
+  ```bash
+  pulumi config set --secret postgresPassword "$(openssl rand -hex 24)"
+  pulumi config set --secret n8nEncryptionKey "$(openssl rand -hex 32)"
+  ```
+  `n8nEncryptionKey` in particular must stay fixed across instance replacements — n8n uses it to encrypt stored credentials, so changing it makes existing credentials unreadable.
 - **uv** installed for Python dependency/toolchain management (`uv sync` sets up the venv used by Pulumi).
 - **Cloudflare account** with the target `.dev` domain added, plus a Cloudflare API token scoped for managing Tunnels and DNS records (needed once we get to the Cloudflare Tunnel step).
 - **GitHub repository secrets**, once the Actions pipeline is added:
