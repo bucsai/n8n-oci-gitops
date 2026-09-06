@@ -186,7 +186,7 @@ data_volume = oci.core.Volume(
     compartment_id=compartment.id,
     availability_domain=availability_domain,
     display_name="n8n-data-volume",
-    size_in_gbs=50,
+    size_in_gbs="50",
 )
 
 instance = oci.core.Instance(
