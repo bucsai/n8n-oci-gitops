@@ -58,7 +58,7 @@ flowchart TD
 
 ## Status
 
-🚧 In progress — networking, compute, the Docker/Postgres/n8n stack, and Cloudflare Tunnel + DNS routing are provisioned via Pulumi. The GitHub Actions pipeline is not yet implemented.
+🚧 In progress — networking, compute, the Docker/Postgres/n8n stack, and Cloudflare Tunnel + DNS routing are provisioned via Pulumi. A GitHub Actions pipeline runs `pulumi preview` on PRs and `pulumi up` on push to `main`; it still needs the `PULUMI_ACCESS_TOKEN` repository secret set before it can run (see Prerequisites).
 
 ## Roadmap
 
@@ -68,8 +68,8 @@ flowchart TD
 - [x] Set up Cloudflare Tunnel and DNS routing to `n8n.bucsai.dev`
 - [x] Provision the n8n owner account and license activation via Pulumi config
 - [x] Configure Pulumi remote state backend (Pulumi Cloud, via `pulumi login`)
-- [ ] Build GitHub Actions workflow for `pulumi preview`/`pulumi up` on push/PR
-- [ ] Document secrets/config management (OCI API keys, Cloudflare API token)
+- [x] Build GitHub Actions workflow for `pulumi preview`/`pulumi up` on push/PR
+- [x] Document secrets/config management (OCI API keys, Cloudflare API token)
 
 ## Known Limitations / Follow-ups
 
@@ -115,12 +115,21 @@ Before running anything in this repo, the following need to be in place:
   ```bash
   pulumi config set --secret n8n:licenseKey "<license key>"
   ```
-- **GitHub repository secrets**, once the Actions pipeline is added:
-  - `PULUMI_ACCESS_TOKEN` — lets CI authenticate to the Pulumi Cloud backend
-  - OCI credentials (API key contents, tenancy/user OCIDs, fingerprint, region) — passed as Pulumi config or provider env vars
-  - Cloudflare API token — for Tunnel/DNS provisioning
+- **`PULUMI_ACCESS_TOKEN` GitHub repository secret**, for the Actions pipeline. This is the only credential CI needs — OCI and Cloudflare credentials already live encrypted in the stack's config on Pulumi Cloud (see above), and an authenticated `pulumi up`/`preview` decrypts and uses them automatically without CI ever seeing the plaintext. Generate one at [app.pulumi.com](https://app.pulumi.com/) under Settings → Access Tokens, then:
+  ```bash
+  gh secret set PULUMI_ACCESS_TOKEN
+  ```
 
 Nothing above should ever be committed in plaintext; anything stack-specific (like the OCI credentials above) goes in Pulumi config via `pulumi config set --secret <key> <value>`, which encrypts the value before it's written to `Pulumi.<stack>.yaml`.
+
+## Continuous Deployment
+
+`.github/workflows/pulumi.yml` runs on every pull request and push to `main`:
+
+- **Pull requests** run `pulumi preview` and post the plan as a PR comment — nothing is applied, so it's safe to run on any PR without review first.
+- **Pushes to `main`** run `pulumi up`, applying changes directly to the `dev` stack. There's no separate approval gate beyond whatever branch protection is configured on `main` — merging a PR (or pushing directly) deploys.
+
+Both steps authenticate to Pulumi Cloud with the `PULUMI_ACCESS_TOKEN` repository secret; all other credentials come from the stack's own encrypted config, not from GitHub Actions secrets.
 
 ## Local Development
 
