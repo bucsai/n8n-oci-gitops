@@ -3,8 +3,22 @@ name: Pulumi
 on:
   pull_request:
     branches: [main]
+    paths:
+      - "__main__.py"
+      - "Pulumi.yaml"
+      - "Pulumi.*.yaml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/pulumi.yml"
   push:
     branches: [main]
+    paths:
+      - "__main__.py"
+      - "Pulumi.yaml"
+      - "Pulumi.*.yaml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/pulumi.yml"
 
 # All OCI/Cloudflare/n8n secrets already live encrypted in the stack's
 # config on Pulumi Cloud (see Pulumi.dev.yaml + README prerequisites) —
