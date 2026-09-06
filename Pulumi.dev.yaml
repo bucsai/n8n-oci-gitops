@@ -12,3 +12,9 @@ config:
     secure: AAABAJgcItHdz97zkf/sfGUTFZBaJ2PYvo/AoV1uZalho27Iv2ZTwo1EcvclXDpQz9p6A3ebmpOPAL+gtbs8x9AFbeUlrGUsUJ6JR4Qkbmo=
   n8n-oci-gitops:n8nEncryptionKey:
     secure: AAABAFJ+2J3ZZZLCh1s/AnkkeiqiSdV+4UDaPnKYvx5t5R6/bDBNwcaah5AyKqN0YQlrBEb0BKZGC4bb0Csy+1pQ1OrjlgW/7d7zGaFHFin2amTvw2didzLg5YmWJ8RX
+  n8n-oci-gitops:cloudflareApiToken:
+    secure: AAABAKJ78Q+Hg9yOE+I18L+vDHsL3ZTRHg+87DYoXstKrN41+eXjbCj1lncwJnDufN9Gu9fchFQCZV6oi3fxpl6P5Ewoo+QsHq5+HKD7g6is9u8uYw==
+  n8n-oci-gitops:cloudflareAccountId:
+    secure: AAABAAGff+W4/10stqxe1lA0Y8NC8YQXXXwFN3YDUBQJYr6cN5TAov7D7tWL20onXzSlqLxmc9uX+vfBl95K4Q==
+  n8n-oci-gitops:cloudflareZoneId:
+    secure: AAABAMXAI2dcCkC6LzqVgWObyDK3t67zfghco/wRqQUYv7IWtKy730ZKFpx1BwmAcj6SOiK/7L3v0wbz0bdAew==

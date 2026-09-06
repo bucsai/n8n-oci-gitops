@@ -3,11 +3,16 @@
 import base64
 
 import pulumi
+import pulumi_cloudflare as cloudflare
 import pulumi_oci as oci
 
 config = pulumi.Config()
 postgres_password = config.require_secret("postgresPassword")
 n8n_encryption_key = config.require_secret("n8nEncryptionKey")
+cloudflare_api_token = config.require_secret("cloudflareApiToken")
+cloudflare_account_id = config.require_secret("cloudflareAccountId")
+cloudflare_zone_id = config.require_secret("cloudflareZoneId")
+n8n_hostname = config.get("n8nHostname") or "n8n.bucsai.dev"
 
 DATA_DEVICE = "/dev/oracleoci/oraclevdb"
 DATA_MOUNT_POINT = "/mnt/n8n-data"
@@ -24,6 +29,7 @@ write_files:
     content: |
       POSTGRES_PASSWORD={postgres_password}
       N8N_ENCRYPTION_KEY={n8n_encryption_key}
+      TUNNEL_TOKEN={tunnel_token}
 
   - path: /opt/n8n/docker-compose.yml
     permissions: "0644"
@@ -58,11 +64,25 @@ write_files:
             DB_POSTGRESDB_USER: n8n
             DB_POSTGRESDB_PASSWORD: ${{POSTGRES_PASSWORD}}
             N8N_ENCRYPTION_KEY: ${{N8N_ENCRYPTION_KEY}}
+            N8N_HOST: {hostname}
+            N8N_PROTOCOL: https
+            N8N_PORT: "5678"
+            WEBHOOK_URL: https://{hostname}/
           volumes:
             - {data_mount}/n8n:/home/node/.n8n
-      # No ports are published on either service: n8n is reached only through
-      # the Cloudflare Tunnel container added in a later step, over this
-      # compose file's default internal network.
+
+        cloudflared:
+          image: cloudflare/cloudflared:latest
+          restart: unless-stopped
+          command: tunnel run
+          environment:
+            TUNNEL_TOKEN: ${{TUNNEL_TOKEN}}
+          depends_on:
+            - n8n
+      # No ports are published on n8n or postgres: n8n is reached only
+      # through the cloudflared container, which makes an outbound-only
+      # connection to Cloudflare's edge and proxies to n8n over this compose
+      # file's default internal network.
 
 runcmd:
   # Format the data volume only if it has no filesystem yet, so re-running
@@ -74,24 +94,82 @@ runcmd:
   - bash -c 'UUID=$(blkid -s UUID -o value {device}); grep -q "$UUID" /etc/fstab || echo "UUID=$UUID {data_mount} ext4 defaults,nofail 0 2" >> /etc/fstab'
   - mount -a
   - [ mkdir, -p, "{data_mount}/postgres", "{data_mount}/n8n" ]
+  # n8nio/n8n runs as uid 1000 (the "node" user) and needs to write into its
+  # bind-mounted ~/.n8n dir; mkdir above leaves it root-owned, which n8n
+  # can't write to (postgres's entrypoint fixes its own dir's ownership,
+  # n8n's doesn't).
+  - [ chown, -R, "1000:1000", "{data_mount}/n8n" ]
   - systemctl enable --now docker
   - bash -c 'cd /opt/n8n && docker compose --env-file .env up -d'
 """
 
 
-def _render_cloud_init(pg_password: str, encryption_key: str) -> str:
+def _render_cloud_init(
+    pg_password: str, encryption_key: str, tunnel_token: str, hostname: str
+) -> str:
     rendered = CLOUD_INIT_TEMPLATE.format(
         postgres_password=pg_password,
         n8n_encryption_key=encryption_key,
+        tunnel_token=tunnel_token,
+        hostname=hostname,
         data_mount=DATA_MOUNT_POINT,
         device=DATA_DEVICE,
     )
     return base64.b64encode(rendered.encode()).decode()
 
 
-cloud_init_b64 = pulumi.Output.all(postgres_password, n8n_encryption_key).apply(
-    lambda args: _render_cloud_init(args[0], args[1])
+cloudflare_provider = cloudflare.Provider(
+    "cloudflare",
+    api_token=cloudflare_api_token,
 )
+
+# Config is managed remotely (config_src="cloudflare") via the Config
+# resource below, rather than shipped as a local config file on the VM —
+# keeps the tunnel's routing declared here in Git, not on the instance.
+tunnel = cloudflare.ZeroTrustTunnelCloudflared(
+    "n8n-tunnel",
+    account_id=cloudflare_account_id,
+    name="n8n-tunnel",
+    config_src="cloudflare",
+    opts=pulumi.ResourceOptions(provider=cloudflare_provider),
+)
+
+tunnel_config = cloudflare.ZeroTrustTunnelCloudflaredConfig(
+    "n8n-tunnel-config",
+    account_id=cloudflare_account_id,
+    tunnel_id=tunnel.id,
+    config=cloudflare.ZeroTrustTunnelCloudflaredConfigConfigArgs(
+        ingresses=[
+            cloudflare.ZeroTrustTunnelCloudflaredConfigConfigIngressArgs(
+                hostname=n8n_hostname,
+                service="http://n8n:5678",
+            ),
+            # Catch-all rule required by cloudflared for any request that
+            # doesn't match a hostname above.
+            cloudflare.ZeroTrustTunnelCloudflaredConfigConfigIngressArgs(
+                service="http_status:404",
+            ),
+        ],
+    ),
+    opts=pulumi.ResourceOptions(provider=cloudflare_provider),
+)
+
+dns_record = cloudflare.DnsRecord(
+    "n8n-dns-record",
+    zone_id=cloudflare_zone_id,
+    name=n8n_hostname,
+    type="CNAME",
+    content=tunnel.id.apply(lambda tunnel_id: f"{tunnel_id}.cfargotunnel.com"),
+    ttl=1,  # required "automatic" TTL when proxied
+    proxied=True,
+    opts=pulumi.ResourceOptions(provider=cloudflare_provider),
+)
+
+tunnel_token = cloudflare.get_zero_trust_tunnel_cloudflared_token_output(
+    account_id=cloudflare_account_id,
+    tunnel_id=tunnel.id,
+    opts=pulumi.InvokeOutputOptions(provider=cloudflare_provider),
+).token
 
 compartment = oci.identity.Compartment(
     "n8n-compartment",
@@ -189,6 +267,10 @@ data_volume = oci.core.Volume(
     size_in_gbs="50",
 )
 
+cloud_init_b64 = pulumi.Output.all(
+    postgres_password, n8n_encryption_key, tunnel_token, n8n_hostname
+).apply(lambda args: _render_cloud_init(*args))
+
 instance = oci.core.Instance(
     "n8n-instance",
     compartment_id=compartment.id,
@@ -219,6 +301,11 @@ instance = oci.core.Instance(
         "user_data": cloud_init_b64,
     },
     display_name="n8n-instance",
+    # The data volume can only be attached to one instance at a time, so a
+    # config-driven replace must detach it (by deleting the old instance)
+    # before the new one can attach it at launch — the default
+    # create-before-delete ordering fails with a 409 Conflict.
+    opts=pulumi.ResourceOptions(delete_before_replace=True),
 )
 
 pulumi.export("compartment_id", compartment.id)
@@ -226,3 +313,5 @@ pulumi.export("vcn_id", vcn.id)
 pulumi.export("subnet_id", subnet.id)
 pulumi.export("instance_id", instance.id)
 pulumi.export("data_volume_id", data_volume.id)
+pulumi.export("tunnel_id", tunnel.id)
+pulumi.export("n8n_url", pulumi.Output.concat("https://", n8n_hostname))

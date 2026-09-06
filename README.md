@@ -30,10 +30,10 @@ GitHub Actions (on push/PR)
         ├── Docker (installed via cloud-init, one-shot at boot)
         │     ├── postgres  ─── data dir on attached Block Volume
         │     ├── n8n       ─── talks to postgres, ~/.n8n dir on Block Volume
-        │     └── cloudflared (Cloudflare Tunnel client, added in a later step)
+        │     └── cloudflared (Cloudflare Tunnel client)
         │                         │
         │                         ▼
-        │                Cloudflare Tunnel → custom .dev domain → public internet
+        │                Cloudflare Tunnel → n8n.bucsai.dev → public internet
         │
         └── Block Volume (separate lifecycle from the instance — survives
               instance replacement, so n8n's data outlives config changes)
@@ -64,14 +64,14 @@ GitHub Actions (on push/PR)
 
 ## Status
 
-🚧 In progress — networking, compute, and the Docker/Postgres/n8n stack are provisioned via Pulumi. Cloudflare Tunnel integration and the GitHub Actions pipeline are not yet implemented.
+🚧 In progress — networking, compute, the Docker/Postgres/n8n stack, and Cloudflare Tunnel + DNS routing are provisioned via Pulumi. The GitHub Actions pipeline is not yet implemented.
 
 ## Roadmap
 
 - [x] Define OCI networking (VCN, subnet, security list) via Pulumi
 - [x] Provision the ARM compute instance
 - [x] Automate Docker + n8n installation on the instance via cloud-init
-- [ ] Set up Cloudflare Tunnel and DNS routing to the `.dev` domain
+- [x] Set up Cloudflare Tunnel and DNS routing to `n8n.bucsai.dev`
 - [ ] Configure Pulumi remote state backend
 - [ ] Build GitHub Actions workflow for `pulumi preview`/`pulumi up` on push/PR
 - [ ] Document secrets/config management (OCI API keys, Cloudflare API token)
@@ -79,6 +79,8 @@ GitHub Actions (on push/PR)
 ## Known Limitations / Follow-ups
 
 - **`n8nio/n8n:latest` is unpinned.** Every instance replacement pulls whatever is current at that moment, which is non-reproducible and can introduce breaking changes silently. Should be pinned to a specific version tag once the stack is stable enough that upgrades can be deliberate, versioned changes in `__main__.py` instead.
+- **All three container images (`postgres`, `n8n`, `cloudflared`) are pulled fresh on every instance replacement.** Only `/mnt/n8n-data` (Postgres data, n8n's `~/.n8n`) survives on the persistent Block Volume — the boot disk, and with it Docker's image cache, is thrown away with the old instance. Expect every config change / redeploy to take a few minutes for image pulls before n8n is reachable again, worse on Always Free's throttled NAT egress. Pinning versions (above) would at least make pulls reproducible, not faster.
+- **The documented "emergency debugging via Instance Console Connection" doesn't work as described.** A Console Connection only authenticates the tunnel to OCI's serial console proxy — the `<instance> login:` prompt still needs a real OS credential, and none is configured (no SSH key, no password), by design. Console history capture is also not useful for this: Ubuntu's ARM cloud image doesn't mirror cloud-init/docker output to the serial console, so the captured buffer only has early kernel boot messages. In practice, diagnosing a boot-time failure currently means temporarily adding a `chpasswd` block to `CLOUD_INIT_TEMPLATE` in `__main__.py`, redeploying, and removing it again afterward — not a real fix, just what worked when n8n's container hit a bind-mount permission error (see the `chown` step in `runcmd`) and needed live `docker compose logs` to diagnose.
 - **Instance sized at 2 OCPU / 12GB**, half of the Always Free ARM allowance (4 OCPU / 24GB total) — deliberate headroom, not a constraint. Adjustable via `shape_config` in `__main__.py` if n8n needs more.
 
 ## Prerequisites
@@ -99,7 +101,13 @@ Before running anything in this repo, the following need to be in place:
   ```
   `n8nEncryptionKey` in particular must stay fixed across instance replacements — n8n uses it to encrypt stored credentials, so changing it makes existing credentials unreadable.
 - **uv** installed for Python dependency/toolchain management (`uv sync` sets up the venv used by Pulumi).
-- **Cloudflare account** with the target `.dev` domain added, plus a Cloudflare API token scoped for managing Tunnels and DNS records (needed once we get to the Cloudflare Tunnel step).
+- **Cloudflare account** with `bucsai.dev` added as a zone, plus a Cloudflare API token scoped for `Account.Cloudflare Tunnel:Edit` and `Zone.DNS:Edit` on that zone. Set the following Pulumi config before applying the stack:
+  ```bash
+  pulumi config set --secret cloudflareApiToken "<token>"
+  pulumi config set --secret cloudflareAccountId "<account id, from the Cloudflare dashboard URL or API>"
+  pulumi config set --secret cloudflareZoneId "<zone id for bucsai.dev, from the domain overview page>"
+  ```
+  `n8nHostname` defaults to `n8n.bucsai.dev`; override with `pulumi config set n8nHostname <hostname>` if needed.
 - **GitHub repository secrets**, once the Actions pipeline is added:
   - `PULUMI_ACCESS_TOKEN` — lets CI authenticate to the Pulumi Cloud backend
   - OCI credentials (API key contents, tenancy/user OCIDs, fingerprint, region) — passed as Pulumi config or provider env vars
