@@ -26,7 +26,7 @@ flowchart TD
 
     N8N -.-> Postgres
     Cloudflared -.-> N8N
-    Cloudflared --> Tunnel["Cloudflare Tunnel"] --> DNS["n8n.bucsai.dev"] --> Internet["public internet"]
+    Cloudflared --> Tunnel["Cloudflare Tunnel"] --> DNS["automation.bucsai.dev"] --> Internet["public internet"]
 
     Instance --> Volume["Block Volume<br/>separate lifecycle from the instance —<br/>survives instance replacement, so n8n's<br/>data outlives config changes"]
     Volume -.-> Postgres
@@ -65,7 +65,7 @@ flowchart TD
 - [x] Define OCI networking (VCN, subnet, security list) via Pulumi
 - [x] Provision the ARM compute instance
 - [x] Automate Docker + n8n installation on the instance via cloud-init
-- [x] Set up Cloudflare Tunnel and DNS routing to `n8n.bucsai.dev`
+- [x] Set up Cloudflare Tunnel and DNS routing to `automation.bucsai.dev`
 - [x] Provision the n8n owner account and license activation via Pulumi config
 - [x] Configure Pulumi remote state backend (Pulumi Cloud, via `pulumi login`)
 - [x] Build GitHub Actions workflow for `pulumi preview`/`pulumi up` on push/PR
@@ -102,7 +102,7 @@ Before running anything in this repo, the following need to be in place:
   pulumi config set --secret cloudflare:accountId "<account id, from the Cloudflare dashboard URL or API>"
   pulumi config set --secret cloudflare:zoneId "<zone id for bucsai.dev, from the domain overview page>"
   ```
-  `n8n:hostname` defaults to `n8n.bucsai.dev`; override with `pulumi config set n8n:hostname <hostname>` if needed.
+  `n8n:hostname` defaults to `automation.bucsai.dev`; override with `pulumi config set n8n:hostname <hostname>` if needed.
 - **n8n owner account details** — provisioned via n8n's native `N8N_INSTANCE_OWNER_MANAGED_BY_ENV` mechanism (n8n >= 2.17.0), which creates the account at n8n's own startup, before it ever serves a request — so the public "Set up owner account" screen never appears on the live domain:
   ```bash
   pulumi config set --secret n8n:ownerEmail "you@example.com"
